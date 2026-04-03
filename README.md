@@ -1,109 +1,220 @@
-# **CMPT 371 A3 Socket Programming `Tic-Tac-Toe`**
+# CMPT 371 A3 Socket Programming: TCP File Transfer System
 
-**Course:** CMPT 371 \- Data Communications & Networking  
+**Course:** CMPT 371 - Data Communications & Networking  
 **Instructor:** Mirza Zaeem Baig  
-**Semester:** Spring 2026  
-<span style="color: purple;">***RUBRIC NOTE: As per submission guidelines, only one group member will submit the link to this repository on Canvas.***
+**Semester:** Spring 2026
 
-## **Group Members**
+## Group Members
 
 | Name | Student ID | Email |
-| :---- | :---- | :---- |
+| :--- | :--- | :--- |
 | Jane Doe | 301111111 | jane.doe@university.edu |
 | John Smith | 301222222 | john.smith@university.edu |
 
-## **1\. Project Overview & Description**
+Replace the placeholder member information above before submission.
 
-This project is a multiplayer Tic-Tac-Toe game built using Python's Socket API (TCP). It allows two distinct clients to connect to a central server, be matched into a game lobby, and play against each other in real-time. The server handles the game logic, board state validation, and win-condition checking, ensuring that clients cannot cheat by modifying their local game state.
+## 1. Project Overview
 
-## **2\. System Limitations & Edge Cases**
+This project is a command-line TCP file transfer system built with Python's standard library socket API. A central server accepts multiple client connections concurrently and provides a shared file repository. Clients can list files, upload files, download files, delete files, and disconnect using a small text-based application protocol over TCP.
 
-As required by the project specifications, we have identified and handled (or defined) the following limitations and potential issues within our application scope:
+The project is intentionally scoped to be reliable and easy to demo within a short course-project timeline:
 
-* **Handling Multiple Clients Concurrently:** 
-  * <span style="color: green;">*Solution:*</span> We utilized Python's threading module. When two clients connect, they are popped from the matchmaking\_queue and assigned to an isolated game\_session daemon thread. This ensures concurrent games do not block the main server event listener.  
-  * <span style="color: red;">*Limitation:*</span> Thread creation is limited by system resources. An enterprise application would eventually need a thread pool or asynchronous I/O (like asyncio) to handle tens of thousands of connections.  
-* **TCP Stream Buffering:** 
-  * <span style="color: green;">*Solution:*</span> TCP is a continuous byte stream, meaning multiple JSON messages can be mashed together if sent rapidly. We implemented an application-layer fix by appending a newline \\n to all JSON payloads and splitting the buffer on the client/server side to process them atomically.  
-* **Input Validation & Security:** 
-  * <span style="color: red;">*Limitation:*</span> The client side uses a basic try/except ValueError to prevent crashes from bad user input (like typing letters instead of numbers). However, malicious users could still theoretically modify the client script to send invalid coordinates. Our server assumes well-formatted JSON integers in this basic implementation.
+- No GUI
+- No external dependencies
+- No authentication
+- No resume support
+- No encryption or compression
 
-## **3\. Video Demo**
+## 2. Features
 
-<span style="color: purple;">***RUBRIC NOTE: Include a clickable link.***</span>  
-Our 2-minute video demonstration covering connection establishment, data exchange, real-time gameplay, and process termination can be viewed below:  
-[**▶️ Watch Project Demo on YouTube**](https://www.youtube.com/watch?v=dQw4w9WgXcQ)
+- Multi-client server using `threading`
+- Shared server-side storage folder
+- Upload and download support for text and binary files
+- Delete and list operations
+- Explicit server responses for success and failure
+- Filename validation to block path traversal such as `../secret.txt`
+- Header framing with newline-delimited commands and exact-size file payload transfer
 
-## **4\. Prerequisites (Fresh Environment)**
+## 3. Project Structure
 
-To run this project, you need:
-
-* **Python 3.10** or higher.  
-* No external pip installations are required (uses standard socket, threading, json, sys libraries).  
-* (Optional) VS Code or Terminal.
-
-<span style="color: purple;">***RUBRIC NOTE: No external libraries are required. Therefore, a requirements.txt file is not strictly necessary for dependency installation, though one might be included for environment completeness.***</span>
-
-## **4\. Step-by-Step Run Guide**
-
-<span style="color: purple;">***RUBRIC NOTE: The grader must be able to copy-paste these commands.***</span>
-
-
-### **Step 1: Start the Server**
-
-Open your terminal and navigate to the project folder. The server binds to 127.0.0.1 on port 5050\.  
-```bash
-python server.py  
-# Console output: "[STARTING] Server is listening on 127.0.0.1:5050"
+```text
+CMPT371_A3_Socket_Programming/
+├── README.md
+├── src/
+│   ├── client.py
+│   └── server.py
+└── server_storage/
 ```
 
-### **Step 2: Connect Player 1 (X)**
+The `server_storage/` directory is created automatically the first time the server starts.
 
-Open a **new** terminal window (keep the server running). Run the client script to start the first client.  
+## 4. Prerequisites
+
+- Python 3.10 or newer
+- No `pip install` step required
+
+## 5. How to Run
+
+Run all commands from the project root.
+
+### Step 1: Start the server
+
 ```bash
-python client.py  
-# Console output: "Connected. Waiting for opponent..."
+python3 src/server.py
 ```
 
-### **Step 3: Connect Player 2 (O)**
+Expected console output:
 
-Open a **third** terminal window. Run the client script again to start the second client.  
-```bash
-python client.py  
-# Console output: "Connected. Waiting for opponent..."
-# Console output: "Match found! You are Player O."
+```text
+[STARTING] File server listening on 127.0.0.1:5050
 ```
 
-### **Step 4: Gameplay**
+### Step 2: Start a client
 
-1. **Player X** will be prompted: Enter row and col (e.g., '1 1'):.  
-2. Type two numbers separated by a space (from 0 to 2\) and press Enter.  
-3. The server updates the board on both screens.  
-4. **Player O** takes their turn.  
-5. The connection naturally terminates when a win/draw is achieved.
+Open a new terminal and run:
 
-## **5\. Technical Protocol Details (JSON over TCP)**
+```bash
+python3 src/client.py
+```
 
-We designed a custom application-layer protocol for data exchange usin JSON over TCP:
+Expected console output:
 
-* **Message Format:** `{"type": <string>, "payload": <data>}`  
-* **Handshake Phase:** \* Client sends: `{"type": "CONNECT"}`  
-  * Server responds: `{"type": "WELCOME", "payload": "Player X"}`  
-* **Gameplay Phase:**  
-  * Client sends: `{"type": "MOVE", "row": 1, "col": 1}`  
-  * Server broadcasts: `{"type": "UPDATE", "board": [[...], [...], [...]], , "turn": "O", "status": "ongoing"}`
+```text
+Connected to file server at 127.0.0.1:5050
+Commands:
+  list
+  upload <local_path>
+  download <remote_filename> <local_path>
+  delete <remote_filename>
+  quit
+```
 
+### Step 3: Run client commands
 
-## **6\. Academic Integrity & References**
+Available commands:
 
-<span style="color: purple;">***RUBRIC NOTE: List all references used and help you got. Below is an example.***</span>
+- `list`
+- `upload <local_path>`
+- `download <remote_filename> <local_path>`
+- `delete <remote_filename>`
+- `help`
+- `quit`
 
-* **Code Origin:**  
-  * The socket boilerplate was adapted from the course tutorial "TCP Echo Server". The core multithreaded game logic, protocol, and state management were written by the group.  
-* **GenAI Usage:**  
-  * ChatGPT was used to assist in generating the Unicode box-drawing characters for the CLI interface, and to help structure the TCP buffer-splitting logic (`\n delimiter`).  
-  * Gemini was used to help in `README.md` writing and polishing.  
-  * GitHub Copilot was used to help plan the workflow of the application.   
-* **References:**  
-  * [Python Socket Programming HOWTO](https://docs.python.org/3/howto/sockets.html)  
-  * [Real Python: Intro to Python Threading](https://realpython.com/intro-to-python-threading/)
+Example session:
+
+```text
+file-transfer> list
+No files available on the server.
+
+file-transfer> upload ./demo.txt
+OK Uploaded demo.txt (42 bytes)
+
+file-transfer> list
+Files on server:
+  demo.txt (42 bytes)
+
+file-transfer> download demo.txt ./downloads/demo_copy.txt
+Downloaded demo.txt to downloads/demo_copy.txt (42 bytes)
+
+file-transfer> delete demo.txt
+OK Deleted demo.txt
+
+file-transfer> quit
+OK Goodbye.
+```
+
+## 6. Protocol Design
+
+The application-layer protocol uses ASCII text headers terminated by `\n`. File bytes are transferred immediately after headers that include a declared size.
+
+### Client commands
+
+- `LIST`
+- `UPLOAD <filename> <size>`
+- `DOWNLOAD <filename>`
+- `DELETE <filename>`
+- `QUIT`
+
+### Server responses
+
+- `OK <message>`
+- `ERROR <message>`
+- `READY`
+- `FILE <filename> <size>`
+- `END`
+
+### Protocol flow
+
+**List files**
+
+```text
+Client: LIST
+Server: OK 2
+Server: FILE report.txt 128
+Server: FILE photo.png 20480
+Server: END
+```
+
+**Upload a file**
+
+```text
+Client: UPLOAD report.txt 128
+Server: READY
+Client: <128 raw bytes>
+Server: OK Uploaded report.txt (128 bytes)
+```
+
+**Download a file**
+
+```text
+Client: DOWNLOAD report.txt
+Server: FILE report.txt 128
+Server: <128 raw bytes>
+```
+
+**Delete a file**
+
+```text
+Client: DELETE report.txt
+Server: OK Deleted report.txt
+```
+
+## 7. Validation and Edge Cases
+
+- Invalid filenames are rejected if they contain path separators such as `/` or `\`, or if they try to use special names like `.` or `..`.
+- Download and delete requests for missing files return an explicit error response.
+- Upload requests reject non-integer or negative sizes.
+- The server handles each client in its own thread so one client does not block new connections.
+- TCP buffering is handled with an application-layer reader that separates newline headers from raw payload bytes.
+- Interrupted uploads are discarded so partial files are not published in shared storage.
+- If a client disconnects during transfer, the server logs the disconnect and continues serving later clients.
+
+## 8. Suggested Demo Flow
+
+For a short video demo, show the following in order:
+
+1. Start the server.
+2. Connect Client A and run `list`.
+3. Upload a text file from Client A.
+4. Connect Client B and run `list` to show shared server state.
+5. Download the uploaded file from Client B.
+6. Delete the file from one client.
+7. Attempt to download the deleted file to demonstrate server-side error handling.
+
+## 9. Video Demo
+
+Add your final video link here before submission:
+
+- `[Project Demo Video](PASTE-YOUR-VIDEO-LINK-HERE)`
+
+## 10. Academic Integrity and References
+
+Update this section with your actual sources before submission.
+
+- Code Origin:
+  - Core socket programming, protocol handling, and file-transfer logic were implemented in this repository for the course project.
+- GenAI Usage:
+  - Document any AI tools used for planning, debugging, or documentation writing.
+- References:
+  - [Python Socket Programming HOWTO](https://docs.python.org/3/howto/sockets.html)
+  - [Python threading documentation](https://docs.python.org/3/library/threading.html)

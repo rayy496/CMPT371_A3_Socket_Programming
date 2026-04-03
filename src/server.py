@@ -1,133 +1,219 @@
 """
-CMPT 371 A3: Multiplayer Tic-Tac-Toe Server
-Architecture: TCP Sockets with Multithreaded Session Management
-Reference: Socket boilerplate adapted from "TCP Echo Server" tutorial.
+CMPT 371 A3: TCP File Transfer Server
+Architecture: threaded TCP server with a simple text-header protocol.
 """
 
+from __future__ import annotations
+
+import os
 import socket
 import threading
-import json
+from pathlib import Path
 
-# Server configuration
-HOST = '127.0.0.1'
+
+HOST = "127.0.0.1"
 PORT = 5050
+BUFFER_SIZE = 4096
+STORAGE_DIR = Path(__file__).resolve().parent.parent / "server_storage"
 
-# Matchmaking Queue: Temporarily holds connected client sockets until 
-# two players are available to form a GameSession.
-matchmaking_queue = []
 
-def check_winner(board):
-    """
-    Basic win and draw validation.
-    Enforces the "Single Source of Truth" rule: the server calculates wins 
-    so clients cannot cheat by modifying their local memory.
-    """
-    # Check rows and columns for a match
-    for i in range(3):
-        if board[i][0] == board[i][1] == board[i][2] != ' ': return board[i][0]
-        if board[0][i] == board[1][i] == board[2][i] != ' ': return board[0][i]
+class BufferedSocket:
+    """Read newline-delimited headers and exact byte payloads from one socket."""
 
-    # Check diagonals
-    if board[0][0] == board[1][1] == board[2][2] != ' ': return board[0][0]
-    if board[0][2] == board[1][1] == board[2][0] != ' ': return board[0][2]
+    def __init__(self, conn: socket.socket) -> None:
+        self.conn = conn
+        self.buffer = bytearray()
 
-    # Check for a draw (no empty spaces left)
-    if all(cell != ' ' for row in board for cell in row): return 'Draw'
-    return None
+    def recv_line(self) -> str:
+        while b"\n" not in self.buffer:
+            chunk = self.conn.recv(BUFFER_SIZE)
+            if not chunk:
+                raise ConnectionError("Connection closed while waiting for a header.")
+            self.buffer.extend(chunk)
 
-def game_session(conn_x, conn_o):
-    """
-    Isolated game loop for two matched players running on a background thread.
-    This guarantees concurrent sessions do not block each other.
-    """
-    # Protocol: Assign roles using the "WELCOME" message.
-    # Note: \n is appended to act as a TCP message boundary.
-    conn_x.sendall((json.dumps({"type": "WELCOME", "payload": "Player X"}) + '\n').encode('utf-8'))
-    conn_o.sendall((json.dumps({"type": "WELCOME", "payload": "Player O"}) + '\n').encode('utf-8'))
-    
-    # Initialize the authoritative game state
-    board = [[' ', ' ', ' '], [' ', ' ', ' '], [' ', ' ', ' ']]
-    turn = 'X'
-    
-    # Broadcast initial empty board to both players
-    update_msg = json.dumps({"type": "UPDATE", "board": board, "turn": turn, "status": "ongoing"}) + '\n'
-    conn_x.sendall(update_msg.encode('utf-8'))
-    conn_o.sendall(update_msg.encode('utf-8'))
-    
-    # Map roles to their respective socket objects
-    sockets = {'X': conn_x, 'O': conn_o}
-    
-    while True:
-        active_socket = sockets[turn]
-        # Block and wait for the active player to send their move
-        data = active_socket.recv(1024).decode('utf-8')
-        
-        # If multiple messages arrive buffered together in the TCP stream, 
-        # we only process the first valid one using the \n boundary.
-        clean_data = data.strip().split('\n')[0]
-        msg = json.loads(clean_data)
-        
-        # Protocol: Process the "MOVE" action
-        if msg["type"] == "MOVE":
-            r, c = msg["row"], msg["col"]
-            # Update authoritative state
-            board[r][c] = turn  
-            
-            # Check for win/draw after the move
-            winner = check_winner(board)
-            status = "ongoing"
-            if winner:
-                status = "Draw!" if winner == 'Draw' else f"Player {winner} wins!"
-            else:
-                # Swap turns if the game is still ongoing
-                turn = 'O' if turn == 'X' else 'X'
-                
-            # Broadcast the updated state to both clients simultaneously
-            update_msg = json.dumps({"type": "UPDATE", "board": board, "turn": turn, "status": status}) + '\n'
-            conn_x.sendall(update_msg.encode('utf-8'))
-            conn_o.sendall(update_msg.encode('utf-8'))
-            
-            # Terminate the loop if the game has concluded
-            if winner:
+        line, _, remainder = self.buffer.partition(b"\n")
+        self.buffer = bytearray(remainder)
+        return line.decode("utf-8").strip()
+
+    def recv_to_file(self, output_file, size: int) -> None:
+        remaining = size
+
+        if self.buffer:
+            consumed = min(len(self.buffer), remaining)
+            output_file.write(self.buffer[:consumed])
+            del self.buffer[:consumed]
+            remaining -= consumed
+
+        while remaining > 0:
+            chunk = self.conn.recv(min(BUFFER_SIZE, remaining))
+            if not chunk:
+                raise ConnectionError("Connection closed during file transfer.")
+            output_file.write(chunk)
+            remaining -= len(chunk)
+
+    def send_line(self, message: str) -> None:
+        self.conn.sendall(f"{message}\n".encode("utf-8"))
+
+
+def is_valid_filename(filename: str) -> bool:
+    if not filename or filename in {".", ".."}:
+        return False
+    if "/" in filename or "\\" in filename:
+        return False
+    return os.path.basename(filename) == filename
+
+
+def safe_storage_path(filename: str) -> Path:
+    return STORAGE_DIR / filename
+
+
+def handle_list(buffered: BufferedSocket) -> None:
+    files = []
+    for path in sorted(STORAGE_DIR.iterdir()):
+        if path.is_file():
+            files.append((path.name, path.stat().st_size))
+
+    buffered.send_line(f"OK {len(files)}")
+    for name, size in files:
+        buffered.send_line(f"FILE {name} {size}")
+    buffered.send_line("END")
+
+
+def handle_upload(buffered: BufferedSocket, parts: list[str]) -> None:
+    if len(parts) != 3:
+        buffered.send_line("ERROR Usage: UPLOAD <filename> <size>")
+        return
+
+    _, filename, size_text = parts
+    if not is_valid_filename(filename):
+        buffered.send_line("ERROR Invalid filename.")
+        return
+
+    try:
+        size = int(size_text)
+    except ValueError:
+        buffered.send_line("ERROR File size must be an integer.")
+        return
+
+    if size < 0:
+        buffered.send_line("ERROR File size must be non-negative.")
+        return
+
+    destination = safe_storage_path(filename)
+    temp_destination = destination.with_name(f".{filename}.part-{threading.get_ident()}")
+    buffered.send_line("READY")
+    try:
+        with temp_destination.open("wb") as output_file:
+            buffered.recv_to_file(output_file, size)
+        temp_destination.replace(destination)
+    except Exception:
+        if temp_destination.exists():
+            temp_destination.unlink()
+        raise
+
+    buffered.send_line(f"OK Uploaded {filename} ({size} bytes)")
+
+
+def handle_download(buffered: BufferedSocket, parts: list[str]) -> None:
+    if len(parts) != 2:
+        buffered.send_line("ERROR Usage: DOWNLOAD <filename>")
+        return
+
+    _, filename = parts
+    if not is_valid_filename(filename):
+        buffered.send_line("ERROR Invalid filename.")
+        return
+
+    source = safe_storage_path(filename)
+    if not source.is_file():
+        buffered.send_line("ERROR File not found.")
+        return
+
+    size = source.stat().st_size
+    buffered.send_line(f"FILE {filename} {size}")
+    with source.open("rb") as input_file:
+        while True:
+            chunk = input_file.read(BUFFER_SIZE)
+            if not chunk:
                 break
-                
-    # Safely close the sockets when the session ends
-    conn_x.close()
-    conn_o.close()
+            buffered.conn.sendall(chunk)
 
-def start_server():
-    """
-    Main server event loop. Binds the socket and populates the matchmaking queue.
-    """
-    # Initialize an IPv4 (AF_INET) TCP (SOCK_STREAM) socket
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((HOST, PORT))
-    server.listen()
-    print(f"[STARTING] Server is listening on {HOST}:{PORT}")
-    
+
+def handle_delete(buffered: BufferedSocket, parts: list[str]) -> None:
+    if len(parts) != 2:
+        buffered.send_line("ERROR Usage: DELETE <filename>")
+        return
+
+    _, filename = parts
+    if not is_valid_filename(filename):
+        buffered.send_line("ERROR Invalid filename.")
+        return
+
+    target = safe_storage_path(filename)
+    if not target.is_file():
+        buffered.send_line("ERROR File not found.")
+        return
+
+    target.unlink()
+    buffered.send_line(f"OK Deleted {filename}")
+
+
+def handle_client(conn: socket.socket, addr: tuple[str, int]) -> None:
+    buffered = BufferedSocket(conn)
+    print(f"[CONNECT] Client connected from {addr[0]}:{addr[1]}")
+
     try:
         while True:
-            # Block until a new client connects
+            header = buffered.recv_line()
+            if not header:
+                buffered.send_line("ERROR Empty command.")
+                continue
+
+            parts = header.split()
+            command = parts[0].upper()
+
+            if command == "LIST":
+                handle_list(buffered)
+            elif command == "UPLOAD":
+                handle_upload(buffered, parts)
+            elif command == "DOWNLOAD":
+                handle_download(buffered, parts)
+            elif command == "DELETE":
+                handle_delete(buffered, parts)
+            elif command == "QUIT":
+                buffered.send_line("OK Goodbye.")
+                break
+            else:
+                buffered.send_line("ERROR Unsupported command.")
+    except ConnectionError as exc:
+        print(f"[DISCONNECT] {addr[0]}:{addr[1]} disconnected: {exc}")
+    except OSError as exc:
+        print(f"[ERROR] Client {addr[0]}:{addr[1]}: {exc}")
+    finally:
+        conn.close()
+        print(f"[CLOSED] Connection closed for {addr[0]}:{addr[1]}")
+
+
+def start_server() -> None:
+    STORAGE_DIR.mkdir(exist_ok=True)
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((HOST, PORT))
+    server.listen()
+    print(f"[STARTING] File server listening on {HOST}:{PORT}")
+    print(f"[STORAGE] Serving files from {STORAGE_DIR}")
+
+    try:
+        while True:
             conn, addr = server.accept()
-            data = conn.recv(1024).decode('utf-8')
-            
-            # Protocol: Check for the initial "CONNECT" handshake
-            if "CONNECT" in data:
-                matchmaking_queue.append(conn)
-                print(f"[QUEUE] Player added. Queue size: {len(matchmaking_queue)}")
-                
-                # Session Management: When 2 players are queued, match them up
-                if len(matchmaking_queue) >= 2:
-                    player_x = matchmaking_queue.pop(0)
-                    player_o = matchmaking_queue.pop(0)
-                    # Spawn an isolated GameSession thread for the matched pair
-                    print("[MATCH] 2 Players found. Spawning GameSession thread.")
-                    threading.Thread(target=game_session, args=(player_x, player_o)).start()
+            worker = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+            worker.start()
     except KeyboardInterrupt:
-        # Graceful shutdown on Ctrl+C
         print("\n[SHUTDOWN] Server closing...")
     finally:
         server.close()
+
 
 if __name__ == "__main__":
     start_server()

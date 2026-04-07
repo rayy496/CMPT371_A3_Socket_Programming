@@ -14,14 +14,18 @@ HOST = "127.0.0.1"
 PORT = 5050
 BUFFER_SIZE = 4096
 
-
+# class based off socket to handle data transfer via bytearray
 class BufferedSocket:
     """Read newline-delimited headers and exact byte payloads from one socket."""
 
+    # initialize the object
     def __init__(self, conn: socket.socket) -> None:
         self.conn = conn
         self.buffer = bytearray()
 
+    # handle receiving byte str from server, up to a newline
+    # returns a str of the first tuple from partition(b"\n"), essentially the main server message
+    # sets self.buffer with whatever comes after the newline (in practice, empty)
     def recv_line(self) -> str:
         while b"\n" not in self.buffer:
             chunk = self.conn.recv(BUFFER_SIZE)
@@ -33,6 +37,9 @@ class BufferedSocket:
         self.buffer = bytearray(remainder)
         return line.decode("utf-8").strip()
 
+    # takes working dir file name and total file size
+    # first writes whatever is in buffer to <working_dir>/<output_file>, 
+    # then writes wtv is being received from server
     def recv_to_file(self, output_file, size: int) -> None:
         remaining = size
 
@@ -49,19 +56,25 @@ class BufferedSocket:
             output_file.write(chunk)
             remaining -= len(chunk)
 
+    # send a message to server (e.g. for commands)
     def send_line(self, message: str) -> None:
         self.conn.sendall(f"{message}\n".encode("utf-8"))
 
-
+# help command
+# also printed upon first connection with server
 def print_help() -> None:
     print("Commands:")
+    print("  help (prints these commands)")
     print("  list")
     print("  upload <local_path>")
     print("  download <remote_filename> <local_path>")
     print("  delete <remote_filename>")
     print("  quit")
 
-
+# list command
+# first receives status msg with # of files in <working_dir>/<server_storage>
+# then, receives lines containing file info for each file in server storage
+# prints a line for each file
 def handle_list(buffered: BufferedSocket) -> None:
     buffered.send_line("LIST")
     status = buffered.recv_line()
@@ -91,7 +104,12 @@ def handle_list(buffered: BufferedSocket) -> None:
             print(f"Unexpected response: {line}")
             break
 
-
+# upload command
+# first checks for valid filepath (should be <working_dir>/<local_path_text>)
+#   ensures the filepath does not go outside working dir (checks ".", "..")
+# then, gets name and size of file, sends line to server
+# once server is ready, open file at path and read chunks, then send to server
+# finally, print response from server
 def handle_upload(buffered: BufferedSocket, local_path_text: str) -> None:
     local_path = Path(local_path_text).expanduser()
     if not local_path.is_file():
@@ -119,7 +137,13 @@ def handle_upload(buffered: BufferedSocket, local_path_text: str) -> None:
 
     print(buffered.recv_line())
 
-
+# download command
+# first checks for valid filepaths 
+#   file will be written at <working_dir>/<local_path_text>
+#   if the desired destination path doesn't have a parent folder, make one
+# then, gets desired filename from server_storage, sends line to server
+# gets size of file from server response
+# writes file data received from server into path specified earlier\
 def handle_download(buffered: BufferedSocket, remote_filename: str, local_path_text: str) -> None:
     local_path = Path(local_path_text).expanduser()
     if local_path.exists() and local_path.is_dir():
@@ -151,12 +175,15 @@ def handle_download(buffered: BufferedSocket, remote_filename: str, local_path_t
 
     print(f"Downloaded {server_filename} to {local_path} ({size} bytes)")
 
-
+# delete command
+# sends line to server with desired filename to delete
+#   refers to <working_dir>/server_storage/<remote_filename>
+# prints server response
 def handle_delete(buffered: BufferedSocket, remote_filename: str) -> None:
     buffered.send_line(f"DELETE {remote_filename}")
     print(buffered.recv_line())
 
-
+# start client process
 def start_client() -> None:
     conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     conn.connect((HOST, PORT))
@@ -167,7 +194,7 @@ def start_client() -> None:
 
     try:
         while True:
-            raw_command = input("\nfile-transfer> ").strip()
+            raw_command = input("\nfile-transfer> ").strip()    # wait for user command
             if not raw_command:
                 continue
 
@@ -179,6 +206,8 @@ def start_client() -> None:
 
             command = parts[0].lower()
 
+            # handle user commands + inform them if syntax is incorrect
+            # if "quit", close connection
             if command == "list":
                 handle_list(buffered)
             elif command == "upload":

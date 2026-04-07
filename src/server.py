@@ -16,14 +16,18 @@ PORT = 5050
 BUFFER_SIZE = 4096
 STORAGE_DIR = Path(__file__).resolve().parent.parent / "server_storage"
 
-
+# class based off socket to handle data transfer via bytearray
 class BufferedSocket:
     """Read newline-delimited headers and exact byte payloads from one socket."""
 
+    # initialize the object
     def __init__(self, conn: socket.socket) -> None:
         self.conn = conn
         self.buffer = bytearray()
 
+    # handle receiving byte str from client, up to a newline
+    # returns a str of the first tuple from partition(b"\n"), essentially the main server message
+    # sets self.buffer with whatever comes after the newline (in practice, empty)
     def recv_line(self) -> str:
         while b"\n" not in self.buffer:
             chunk = self.conn.recv(BUFFER_SIZE)
@@ -35,6 +39,9 @@ class BufferedSocket:
         self.buffer = bytearray(remainder)
         return line.decode("utf-8").strip()
 
+    # takes working dir file name and total file size
+    # first writes whatever is in buffer to <working_dir>/<output_file>, 
+    # then writes wtv is being received from server
     def recv_to_file(self, output_file, size: int) -> None:
         remaining = size
 
@@ -51,10 +58,12 @@ class BufferedSocket:
             output_file.write(chunk)
             remaining -= len(chunk)
 
+    # send a message to client (e.g. for status/response)
     def send_line(self, message: str) -> None:
         self.conn.sendall(f"{message}\n".encode("utf-8"))
 
-
+# helper fcn to determine valid filename
+# "valid" meaning no ".", "..", or slashes to ensure user doesn't access files from elsewhere
 def is_valid_filename(filename: str) -> bool:
     if not filename or filename in {".", ".."}:
         return False
@@ -62,11 +71,15 @@ def is_valid_filename(filename: str) -> bool:
         return False
     return os.path.basename(filename) == filename
 
-
+# helper fcn to get server_storage filepath
+# builds a path object as a possible destination for a new file
 def safe_storage_path(filename: str) -> Path:
     return STORAGE_DIR / filename
 
-
+# list command
+# first, retrieves all files in server_storage, appends to array
+# then, sends line with total # of files
+# then, sends a line for each file with its name and size
 def handle_list(buffered: BufferedSocket) -> None:
     files = []
     for path in sorted(STORAGE_DIR.iterdir()):
@@ -78,7 +91,12 @@ def handle_list(buffered: BufferedSocket) -> None:
         buffered.send_line(f"FILE {name} {size}")
     buffered.send_line("END")
 
-
+# upload command
+# gets filename and file size from client
+# sets up intended + temp destinations
+# writes data received from to temp destination first, then replaces file with intended dest
+# if error is encountered during writing, delete the file at temp dest
+# finally, send status msg to client
 def handle_upload(buffered: BufferedSocket, parts: list[str]) -> None:
     if len(parts) != 3:
         buffered.send_line("ERROR Usage: UPLOAD <filename> <size>")
@@ -113,7 +131,12 @@ def handle_upload(buffered: BufferedSocket, parts: list[str]) -> None:
 
     buffered.send_line(f"OK Uploaded {filename} ({size} bytes)")
 
-
+# download command
+# get filename from client command
+# retrieve path object using filename (i.e. <working_dir>/server_storage/<filename>)
+# get file size using path object
+# read file using path object (i.e. from <working_dir>/server_storage/<filename>)
+# send all data from file to client
 def handle_download(buffered: BufferedSocket, parts: list[str]) -> None:
     if len(parts) != 2:
         buffered.send_line("ERROR Usage: DOWNLOAD <filename>")
@@ -138,7 +161,11 @@ def handle_download(buffered: BufferedSocket, parts: list[str]) -> None:
                 break
             buffered.conn.sendall(chunk)
 
-
+# delete command
+# gets filename from user command
+# makes target path object (i.e. <working_dir>/server_storage/<filename>)
+# removes target using unlink()
+# sends response to client
 def handle_delete(buffered: BufferedSocket, parts: list[str]) -> None:
     if len(parts) != 2:
         buffered.send_line("ERROR Usage: DELETE <filename>")
@@ -157,7 +184,9 @@ def handle_delete(buffered: BufferedSocket, parts: list[str]) -> None:
     target.unlink()
     buffered.send_line(f"OK Deleted {filename}")
 
-
+# handle the client and their commands
+# first, opens socket using BufferedSocket class, prints status msg on connection
+# then, handles input received from socket
 def handle_client(conn: socket.socket, addr: tuple[str, int]) -> None:
     buffered = BufferedSocket(conn)
     print(f"[CONNECT] Client connected from {addr[0]}:{addr[1]}")
@@ -172,6 +201,9 @@ def handle_client(conn: socket.socket, addr: tuple[str, int]) -> None:
             parts = header.split()
             command = parts[0].upper()
 
+            # handle user commands
+            # inform user if command is unsupported
+            # if "QUIT", close connection to client and print status msg
             if command == "LIST":
                 handle_list(buffered)
             elif command == "UPLOAD":
@@ -193,7 +225,10 @@ def handle_client(conn: socket.socket, addr: tuple[str, int]) -> None:
         conn.close()
         print(f"[CLOSED] Connection closed for {addr[0]}:{addr[1]}")
 
-
+# start the server
+# creates server_storage directory if not already existing
+# <working_dir>/server_storage
+# starts a worker thread for each client connection
 def start_server() -> None:
     STORAGE_DIR.mkdir(exist_ok=True)
 

@@ -211,9 +211,7 @@ Server: OK Deleted report.txt
 
 ## 9. Video Demo
 
-Add your final video link here before submission:
-
-- `[Project Demo Video](PASTE-YOUR-VIDEO-LINK-HERE)`
+[File transfer demo](https://youtu.be/GmR7TZXajFs)
 
 ## 10. Limitations
 

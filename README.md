@@ -242,8 +242,6 @@ Update this section with your actual sources before submission.
 
 - Code Origin:
   - Core socket programming, protocol handling, and file-transfer logic were implemented in this repository for the course project.
-- GenAI Usage:
-  - Document any AI tools used for planning, debugging, or documentation writing.
 - References:
   - [Python Socket Programming HOWTO](https://docs.python.org/3/howto/sockets.html)
   - [Python threading documentation](https://docs.python.org/3/library/threading.html)
